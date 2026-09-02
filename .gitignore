@@ -1,0 +1,48 @@
+# Build artifacts
+dist/
+build/
+*.spec.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Settings (user-specific)
+docscan_settings.json
+docscan_presets.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Test files and artifacts
+test_*.py
+test_*.png
+test_*.jpg
+test_*.jpeg
+test_*.jpe
+comparison*/
+debug_*/
+final_*.jpg
+final_*.png
+*_debug/
+*_output.png
+*_denoised.png
+*_test_*.png
+augraphy_*.jpg
+DocEnTR/
+robin/
+models/
+compare.py
+app.py
+docscan.py
+test_document_*.jpeg
+test_document_*.png
