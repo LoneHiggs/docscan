@@ -360,6 +360,7 @@ class DocScanGUI:
         
         # Step 1: Background normalization
         kernel_size = max(51, min(gray.shape) // kernel_divisor)
+        kernel_size = min(kernel_size, 251)
         if kernel_size % 2 == 0:
             kernel_size += 1
         background = cv2.medianBlur(gray, kernel_size)
