@@ -336,10 +336,37 @@ class DocScanGUI:
                     if self.original_img is not None:
                         self.gray_img = cv2.cvtColor(self.original_img, cv2.COLOR_BGR2GRAY)
                         self.update_preview()
+                    return
+                # Load first page of PDF
+                if len(doc) == 0:
+                    doc.close()
+                    messagebox.showerror("Error", "Empty PDF file")
+                    return
+                page = doc[0]
+                self.current_pdf_doc = doc
+                self.current_pdf_page = 0
+                dpi = max(200, min(600, int(self.dpi_var.get())))
+                pix = page.get_pixmap(dpi=dpi)
+                self.original_img = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n)
+                if pix.n == 4:
+                    self.original_img = cv2.cvtColor(self.original_img, cv2.COLOR_BGRA2BGR)
+                else:
+                    self.original_img = cv2.cvtColor(self.original_img, cv2.COLOR_RGB2BGR)
+                if self.original_img is not None:
+                    self.gray_img = cv2.cvtColor(self.original_img, cv2.COLOR_BGR2GRAY)
+                    self.update_preview()
                 return
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load PDF: {e}")
                 return
+        else:
+            # Regular image file
+            self.original_img = cv2.imread(file_path)
+            if self.original_img is not None:
+                self.gray_img = cv2.cvtColor(self.original_img, cv2.COLOR_BGR2GRAY)
+                self.update_preview()
+            else:
+                messagebox.showerror("Error", "Could not load image")
 
     def select_batch_files(self):
         """Select multiple image files for batch processing"""
