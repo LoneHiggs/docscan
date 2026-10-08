@@ -19,6 +19,16 @@ try:
 except ImportError:
     HAS_DND = False
 
+try:
+    import pymupdf as fitz
+    HAS_PYMUPDF = True
+except ImportError:
+    try:
+        import fitz
+        HAS_PYMUPDF = True
+    except ImportError:
+        HAS_PYMUPDF = False
+
 
 class DocScanGUI:
     def __init__(self, root):
@@ -31,8 +41,11 @@ class DocScanGUI:
         self.original_img = None
         self.gray_img = None
         self.batch_files = []
+        self.batch_file_objects = []  # For storing metadata like pdf pages
         self.is_processing = False
         self.show_comparison = False
+        self.current_pdf_doc = None
+        self.current_pdf_page = 0
         
         # Default settings
         self.settings = {
@@ -293,11 +306,15 @@ class DocScanGUI:
         self.update_preview()
     
     def open_image(self):
+        filetypes = [
+            ("All files", "*.*"),
+            ("Image files", "*.jpg *.jpeg *.png *.bmp *.tiff")
+        ]
+        if HAS_PYMUPDF:
+            filetypes.insert(0, ("PDF files", "*.pdf"))
+        
         file_path = filedialog.askopenfilename(
-            filetypes=[
-                ("Image files", "*.jpg *.jpeg *.png *.bmp *.tiff"),
-                ("All files", "*.*")
-            ]
+            filetypes=filetypes
         )
         
         if file_path:
@@ -306,19 +323,37 @@ class DocScanGUI:
     def load_image(self, file_path):
         """Load an image from file path"""
         self.image_path = Path(file_path)
-        self.original_img = cv2.imread(file_path)
-        if self.original_img is not None:
-            self.gray_img = cv2.cvtColor(self.original_img, cv2.COLOR_BGR2GRAY)
-            self.update_preview()
-    
+        self.current_pdf_doc = None
+        self.current_pdf_page = 0
+        
+        if file_path.lower().endswith('.pdf') and HAS_PYMUPDF:
+            try:
+                doc = fitz.open(file_path)
+                if not doc.is_pdf:
+                    doc.close()
+                    # Not a PDF, treat as image
+                    self.original_img = cv2.imread(file_path)
+                    if self.original_img is not None:
+                        self.gray_img = cv2.cvtColor(self.original_img, cv2.COLOR_BGR2GRAY)
+                        self.update_preview()
+                return
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load PDF: {e}")
+                return
+
     def select_batch_files(self):
         """Select multiple image files for batch processing"""
+        filetypes = [
+            ("All files", "*.*"),
+            ("Image files", "*.jpg *.jpeg *.png *.bmp *.tiff")
+        ]
+        if HAS_PYMUPDF:
+            filetypes.insert(0, ("PDF files", "*.pdf"))
+            filetypes.insert(0, ("Supported files", "*.pdf *.jpg *.jpeg *.png *.bmp *.tiff"))
+        
         file_paths = filedialog.askopenfilenames(
             title="Select Images",
-            filetypes=[
-                ("Image files", "*.jpg *.jpeg *.png *.bmp *.tiff"),
-                ("All files", "*.*")
-            ]
+            filetypes=filetypes
         )
         
         if file_paths:
@@ -326,16 +361,52 @@ class DocScanGUI:
             self.batch_status_var.set(f"{len(self.batch_files)} files selected")
             self.batch_btn.config(state=tk.NORMAL)
     
+    def load_images_from_path(self, file_path, dpi=300):
+        """Load all images from a file path (handles PDFs with multiple pages). Returns list of (name, cv2_img)."""
+        results = []
+        path = Path(file_path)
+        if path.suffix.lower() == '.pdf' and HAS_PYMUPDF:
+            try:
+                doc = fitz.open(str(path))
+                if not doc.is_pdf:
+                    doc.close()
+                    return results
+                for i in range(len(doc)):
+                    page = doc[i]
+                    pix = page.get_pixmap(dpi=dpi)
+                    img = np.frombuffer(pix.samples, np.uint8).reshape(pix.height, pix.width, pix.n)
+                    if pix.n == 4:
+                        img = cv2.cvtColor(img, cv2.COLOR_BGRA2BGR)
+                    else:
+                        img = cv2.cvtColor(img, cv2.COLOR_RGB2BGR)
+                    results.append((f'{path.stem}_p{i+1}', img))
+                doc.close()
+            except Exception:
+                pass
+            return results
+        else:
+            try:
+                img = cv2.imread(str(path))
+                if img is not None:
+                    results.append((path.stem, img))
+            except Exception:
+                pass
+            return results
+
+
     def select_batch_folder(self):
         """Select a folder for batch processing"""
         folder_path = filedialog.askdirectory(title="Select Folder with Images")
         
         if folder_path:
             folder = Path(folder_path)
-            image_exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
+            if HAS_PYMUPDF:
+                exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff', '.pdf'}
+            else:
+                exts = {'.jpg', '.jpeg', '.png', '.bmp', '.tiff'}
             self.batch_files = [
                 f for f in folder.iterdir() 
-                if f.suffix.lower() in image_exts and f.is_file()
+                if f.suffix.lower() in exts and f.is_file()
             ]
             self.batch_files.sort()
             
@@ -570,31 +641,27 @@ class DocScanGUI:
         
         for file_path in self.batch_files:
             try:
-                # Read image
-                img = cv2.imread(str(file_path))
-                if img is None:
-                    errors.append(f"{file_path.name}: Could not read image")
+                dpi_render = int(self.dpi_var.get())
+                loaded = self.load_images_from_path(file_path, dpi=max(200, dpi_render))
+                if not loaded:
+                    errors.append(f"{file_path.name}: Could not read file")
                     continue
-                
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                result = self.process_image(gray)
-                
-                # Save based on format
-                if output_format in ("folder_png", "zip_png"):
-                    out_path = output_dir / f"{file_path.stem}_enhanced.png"
-                    cv2.imwrite(str(out_path), result)
-                elif output_format in ("folder_jpg", "zip_jpg"):
-                    out_path = output_dir / f"{file_path.stem}_enhanced.jpg"
-                    cv2.imwrite(str(out_path), result, [cv2.IMWRITE_JPEG_QUALITY, 95])
-                elif output_format == "folder_pdf":
-                    out_path = output_dir / f"{file_path.stem}_enhanced.pdf"
-                    pil_image = Image.fromarray(result)
-                    dpi = int(self.dpi_var.get())
-                    pil_image.save(str(out_path), "PDF", resolution=float(dpi))
-                
+                for name, img in loaded:
+                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    result = self.process_image(gray)
+                    # Save based on format
+                    if output_format in ("folder_png", "zip_png"):
+                        out_path = output_dir / f"{name}_enhanced.png"
+                        cv2.imwrite(str(out_path), result)
+                    elif output_format in ("folder_jpg", "zip_jpg"):
+                        out_path = output_dir / f"{name}_enhanced.jpg"
+                        cv2.imwrite(str(out_path), result, [cv2.IMWRITE_JPEG_QUALITY, 95])
+                    elif output_format == "folder_pdf":
+                        out_path = output_dir / f"{name}_enhanced.pdf"
+                        pil_image = Image.fromarray(result)
+                        pil_image.save(str(out_path), "PDF", resolution=float(dpi_render))
                 processed += 1
                 self.root.after(0, lambda p=processed: self.progress_var.set((p / total) * 100))
-                
             except Exception as e:
                 errors.append(f"{file_path.name}: {str(e)}")
         
@@ -642,19 +709,18 @@ class DocScanGUI:
         
         for file_path in self.batch_files:
             try:
-                img = cv2.imread(str(file_path))
-                if img is None:
-                    errors.append(f"{file_path.name}: Could not read image")
+                dpi_render = int(self.dpi_var.get())
+                loaded = self.load_images_from_path(file_path, dpi=max(200, dpi_render))
+                if not loaded:
+                    errors.append(f"{file_path.name}: Could not read file")
                     continue
-                
-                gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                result = self.process_image(gray)
-                pil_image = Image.fromarray(result)
-                pdf_images.append(pil_image)
-                
+                for name, img in loaded:
+                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                    result = self.process_image(gray)
+                    pil_image = Image.fromarray(result)
+                    pdf_images.append(pil_image)
                 processed += 1
                 self.root.after(0, lambda p=processed: self.progress_var.set((p / total) * 100))
-                
             except Exception as e:
                 errors.append(f"{file_path.name}: {str(e)}")
         
